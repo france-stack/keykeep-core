@@ -1,0 +1,112 @@
+KeyKeep（钥守）
+Copyright 2026 KeyKeep contributors
+
+本产品包含由第三方开发的软件。以下按组件分列许可证与归属声明，
+按「随产品分发的形态」组织，不是依赖树的完整清单。
+
+====================================================================
+一、随分发的运行时与安装器
+====================================================================
+
+PostgreSQL 16（便携版由 zonky embedded-postgres-binaries 制品解出）
+  License: PostgreSQL License
+  版权: Copyright (c) 1996-2024, PostgreSQL Global Development Group
+  许可全文: https://www.postgresql.org/about/licence/
+
+Node.js 22
+  License: MIT
+  版权: Copyright Node.js contributors. Copyright Joyent, Inc. and other Node contributors.
+  许可全文: https://github.com/nodejs/node/blob/main/LICENSE
+
+Inno Setup 6（安装器；仅用于生成 Setup.exe，不进运行时）
+  License: Inno Setup License
+  许可全文: https://jrsoftware.org/files/is/license.txt
+
+====================================================================
+二、Go 数据面（gateway / kkconnect / kkdesk / kkapp / kkmock）
+====================================================================
+
+全部直接依赖（均为宽松许可证，无 GPL/AGPL/SSPL）：
+
+  github.com/router-for-me/CLIProxyAPI/v8   MIT
+  github.com/jackc/pgx/v5                   MIT
+  github.com/prometheus/client_golang       Apache-2.0
+  github.com/jchv/go-webview2               MIT
+  golang.org/x/sys                          BSD-3-Clause
+  golang.org/x/term                         BSD-3-Clause
+  gopkg.in/natefinch/lumberjack.v2          MIT
+  gopkg.in/yaml.v3                          MIT + Apache-2.0
+
+间接依赖以 go.mod / go.sum 为准。2026-11-22 逐个读模块缓存里的 LICENSE/COPYING
+全文判定，随包链接的 101 个 Go 模块许可分布为：
+MIT 57 · BSD-3-Clause 22 · Apache-2.0 14 · BSD-2-Clause 4 · ISC 2；
+**无 GPL / AGPL / LGPL / SSPL 组件**（github.com/cloudwego/iasm 未随模块提供
+LICENSE 文件，其上游以 Apache-2.0 发布，许可证文本见仓库）。
+
+**CLIProxyAPI** 以 Go 模块形式在进程内嵌入（route A），未修改其源码，
+许可 MIT，版权归 router-for-me 及其贡献者。
+
+Apache-2.0 组件需附许可全文：本项目 LICENSE 文件即 Apache-2.0 全文，
+对 Apache-2.0 组件同样适用（Apache-2.0 §4(a) 允许以一份副本同时覆盖本项目
+与该组件）。
+
+====================================================================
+三、控制台（Next.js / React）
+====================================================================
+
+  next                    MIT
+  react / react-dom       MIT
+  prisma / @prisma/client Apache-2.0
+  @prisma/adapter-pg      Apache-2.0
+  pg                      MIT
+  @node-rs/argon2         MIT
+  typescript (dev)        Apache-2.0
+  vitest (dev)            MIT
+
+控制台构建期依赖里另有两类需要说明的许可证（均不触发本项目开源义务）：
+
+  lightningcss            MPL-2.0  —— 文件级 copyleft，本项目未修改其源码
+  caniuse-lite            CC-BY-4.0 —— 浏览器兼容数据，未修改
+  tslib                   0BSD     —— 无义务
+
+**注意：@img/sharp-win32-x64**（Next.js 图像优化的可选依赖）
+  License: Apache-2.0 AND LGPL-3.0-or-later
+  LGPL 部分是预编译的 libvips 动态库，以独立 DLL 形式随包分发、未修改、
+  未静态链接，因此不构成本项目自身的开源义务。libvips 源码可从
+  https://github.com/libvips/libvips 获取；替换该 DLL 不会被阻止。
+
+控制台 UI 仅有少量「视觉与布局参考」，无第三方代码复制。
+
+====================================================================
+四、数据与图标
+====================================================================
+
+models.dev 模型目录（模型清单与价格，运行时拉取，不随包分发）
+  License: MIT（anomalyco/models.dev）
+  URL: https://models.dev/api.json
+
+供应商图标（src/control/public/provider-icons/）
+  来源与授权逐条列于该目录的 NOTICE.md：厂商官网原始 SVG、
+  Simple Icons（CC0）与 Iconify logos（CC0）。
+  所有图标与商标归各厂商所有，仅以「标识所列供应商」为目的使用
+  （nominative fair use），不表示任何厂商对本项目的赞助或认可。
+
+====================================================================
+五、开发期工具（不分发）
+====================================================================
+
+  golangci-lint   GPL-3.0   仅在 CI 中调用，不链接进产品
+  gosec           Apache-2.0 仅在 CI 中调用
+  govulncheck     BSD-3-Clause 仅在 CI 中调用
+  black / mypy / pytest  MIT 仅开发期使用
+
+====================================================================
+六、如何更新本文件
+====================================================================
+
+随分发依赖变化时更新：
+
+  cd src/gateway && go list -m -f '{{if not .Indirect}}{{.Path}} {{.Version}}{{end}}' all
+  cd src/control && pnpm licenses list        # 或 npx license-checker
+
+发版检查清单见 README 的「开发」一节。

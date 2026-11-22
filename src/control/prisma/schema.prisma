@@ -1,0 +1,429 @@
+// KeyKeep 控制面数据模型（阶段 1 脚手架）。
+// 依据：dev-spec §3.2 十一张表；金额一律 BIGINT 分，时间一律 TIMESTAMPTZ。
+// 迁移脚本后续放在 prisma/migrations/，单向、可重复执行。
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Dept {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  parentId  String?  @db.Uuid
+  parent    Dept?    @relation("DeptTree", fields: [parentId], references: [id])
+  children  Dept[]   @relation("DeptTree")
+  users     User[]
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([parentId])
+}
+
+model Role {
+  id    String @id @default(uuid()) @db.Uuid
+  name  String @unique
+  users User[]
+}
+
+model User {
+  id                String        @id @default(uuid()) @db.Uuid
+  account           String        @unique
+  passwordHash      String
+  displayName       String
+  deptId            String?       @db.Uuid
+  dept              Dept?         @relation(fields: [deptId], references: [id])
+  roleId            String        @db.Uuid
+  role              Role          @relation(fields: [roleId], references: [id])
+  disabled          Boolean       @default(false)
+  failedAttempts    Int           @default(0)
+  lockedUntil       DateTime?     @db.Timestamptz(6)
+  passwordChangedAt DateTime?     @db.Timestamptz(6)
+  apiKeys           ApiKey[]
+  usageRecords      UsageRecord[]
+  distributions     Distribution[] @relation("DistributionCreatedBy")
+  maintenanceTickets     MaintenanceTicket[]   @relation("MaintenanceTicketCreatedBy")
+  maintenanceDecisions   MaintenanceApproval[] @relation("MaintenanceApprovalDecidedBy")
+  createdAt         DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @db.Timestamptz(6)
+
+  @@index([deptId])
+}
+
+model ApiKey {
+  id            String        @id @default(uuid()) @db.Uuid
+  keyHash       Bytes         @unique
+  prefix4       String        @db.VarChar(4)
+  fp6           String        @db.VarChar(6)
+  empId         String        @db.Uuid
+  emp           User          @relation(fields: [empId], references: [id])
+  allowedModels String[]      @default([])
+  // 「分发 API」归属：老板先建一个具名分发入口（含模型白名单与限额），
+  // 再把分发到的 Key 交给某个员工。可空——历史 Key 与手工签发的 Key 都没有分发来源。
+  distributionId String?      @db.Uuid
+  distribution   Distribution? @relation(fields: [distributionId], references: [id])
+  // 备注：让老板能认出「这把是给张三笔记本的」，不参与鉴权。
+  label         String        @default("")
+  revokedAt     DateTime?     @db.Timestamptz(6)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(6)
+  usageRecords  UsageRecord[]
+
+  @@index([empId])
+  @@index([revokedAt])
+  @@index([distributionId])
+}
+
+// 「分发 API」：老板创建的一个具名分发入口（例如「研发-DeepSeek」）。
+// 它是模型白名单与限额的模板，真正的凭据是挂在它下面的若干把 ApiKey（每员工一把）。
+// 老板撤销分发 = 其下所有 Key 立即 401；员工只能看到自己名下的 Key。
+model Distribution {
+  id            String    @id @default(uuid()) @db.Uuid
+  name          String
+  description   String    @default("")
+  // 该分发允许使用的模型（空数组 = 不限，语义与 ApiKey.allowedModels 一致）。
+  allowedModels String[]  @default([])
+  disabled      Boolean   @default(false)
+  revokedAt     DateTime? @db.Timestamptz(6)
+  createdById   String?   @db.Uuid
+  createdBy     User?     @relation("DistributionCreatedBy", fields: [createdById], references: [id])
+  keys          ApiKey[]
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+
+  @@unique([name])
+  @@index([revokedAt])
+}
+
+model ProviderCredential {
+  id               String     @id @default(uuid()) @db.Uuid
+  provider         String
+  name             String     @default("")
+  providerType     String     @default("openai")
+  baseUrl          String     @default("")
+  authHeaderName   String     @default("Authorization")
+  authScheme       String     @default("Bearer")
+  extraHeaders     Json       @default("{}")
+  limitDims        Json       @default("[]")
+  streamTerminator String     @default("")
+  kid              String
+  keyFp6           String     @db.VarChar(6)
+  ct               Bytes
+  nonce            Bytes
+  disabled         Boolean    @default(false)
+  modelMaps        ModelMap[]
+  createdAt        DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime   @updatedAt @db.Timestamptz(6)
+
+  // 同一把上游 Key 允许按不同协议各建一条：一家厂商的 OpenAI 与 Anthropic
+  // 端点本来就需要两条凭据（ADR-009）。同协议重复接入仍被拦成 409。
+  @@unique([kid, keyFp6, providerType])
+  @@index([provider])
+}
+
+model UsageRecord {
+  rid                      String   @id
+  seq                      BigInt   @unique @default(autoincrement())
+  ts                       DateTime @db.Timestamptz(6)
+  keyId                    String   @db.Uuid
+  key                      ApiKey   @relation(fields: [keyId], references: [id])
+  empId                    String   @db.Uuid
+  emp                      User     @relation(fields: [empId], references: [id])
+  deptId                   String?  @db.Uuid
+  provider                 String
+  alias                    String   @default("")
+  modelReq                 String
+  modelServed              String
+  authId                   String   @default("")
+  priceVersion             String   @default("v1")
+  unpriced                 Boolean  @default(false)
+  inputTokens              BigInt
+  outputTokens             BigInt
+  cacheCreationInputTokens BigInt   @default(0)
+  cacheReadInputTokens     BigInt   @default(0)
+  cacheCreation5m          BigInt   @default(0)
+  cacheCreation1h          BigInt   @default(0)
+  costCents                BigInt
+  status                   String
+  requestId                String
+  stream                   Boolean  @default(false)
+  failed                   Boolean  @default(false)
+  ttftMs                   Int?
+  latencyMs                Int?
+  prevHash                 String
+  rowHash                  String
+
+  @@index([ts])
+  @@index([keyId, ts])
+  @@index([empId, ts])
+  @@index([prevHash])
+}
+
+model UsageDaily {
+  day              DateTime @db.Date
+  empId            String   @db.Uuid
+  deptId           String   @db.Uuid
+  model            String
+  calls            BigInt   @default(0)
+  errors           BigInt   @default(0)
+  inputTokens      BigInt   @default(0)
+  outputTokens     BigInt   @default(0)
+  cacheReadTokens  BigInt   @default(0)
+  cacheWriteTokens BigInt   @default(0)
+  costCents        BigInt   @default(0)
+
+  @@id([day, empId, deptId, model])
+  @@index([deptId, day])
+}
+
+model Budget {
+  id            String         @id @default(uuid()) @db.Uuid
+  scope         String
+  scopeId       String
+  period        String
+  limitCents    BigInt
+  usedCents     BigInt         @default(0)
+  reservedCents BigInt         @default(0)
+  updatedAt     DateTime       @updatedAt @db.Timestamptz(6)
+  ledger        BudgetLedger[]
+
+  @@unique([scope, scopeId, period])
+}
+
+model BudgetLedger {
+  id         String   @id @default(uuid()) @db.Uuid
+  budgetId   String   @db.Uuid
+  budget     Budget   @relation(fields: [budgetId], references: [id])
+  rid        String
+  kind       String
+  deltaCents BigInt
+  at         DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([budgetId, rid, kind])
+  @@index([budgetId, at])
+}
+
+model AuditEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  // 链序号：由数据库序列分配，全表单调递增且唯一。它是"写入顺序"的唯一可信证据——
+  // at 只有毫秒精度，同毫秒的多条记录排不出先后，链就没法校验。
+  seq       BigInt   @unique @default(dbgenerated("nextval('\"AuditEvent_seq_seq\"'::regclass)"))
+  at        DateTime @default(now()) @db.Timestamptz(6)
+  actorId   String?
+  action    String
+  detail    Json
+  requestId String?
+  // 防篡改链：摘要输入取自"库里读回来的那一行"，见 lib/audit-chain.ts 顶部说明。
+  prevHash  String?
+  rowHash   String?
+  hashAlgo  String?
+
+  @@index([at])
+  @@index([actorId, at])
+  @@index([action, at])
+}
+
+model RedactRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  pattern     String
+  kind        String   @default("regex")
+  target      String   @default("all")
+  replacement String   @default("")
+  enabled     Boolean  @default(true)
+  priority    Int      @default(100)
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([enabled, priority])
+}
+
+model ModelCatalog {
+  provider               String
+  modelId                String
+  displayName            String
+  contextLength          Int?
+  maxInputTokens         Int?
+  maxOutputTokens        Int?
+  pricingPromptCents     BigInt   @default(0)
+  pricingCompletionCents BigInt   @default(0)
+  pricingCacheReadCents  BigInt   @default(0)
+  type                   String   @default("chat")
+  reasoningLevels        String[] @default([])
+
+  @@id([provider, modelId])
+}
+
+model ModelMap {
+  id           String              @id @default(uuid()) @db.Uuid
+  alias        String
+  provider     String
+  modelId      String
+  credentialId String?             @db.Uuid
+  credential   ProviderCredential? @relation(fields: [credentialId], references: [id])
+
+  // 同一逻辑别名允许多条凭据（渠道组雏形，FR-10/FA-10）；唯一性按凭据区分。
+  @@unique([alias, provider, credentialId])
+  @@index([credentialId])
+}
+
+model Limit {
+  id         String   @id @default(uuid()) @db.Uuid
+  scope      String
+  scopeId    String
+  dim        String
+  limitValue BigInt
+  usedValue  BigInt   @default(0)
+  period     String
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([scope, scopeId, dim])
+}
+
+// ModelPrice 是价格表版本：同一模型可有多版，网关按 effectiveFrom 取当前生效版本。
+// 金额单位「分 / 100 万 token」；历史金额已冻结在 UsageRecord.costCents。
+model ModelPrice {
+  provider       String
+  modelId        String
+  version        String
+  effectiveFrom  DateTime @db.Timestamptz(6)
+  promptPerM     BigInt   @default(0)
+  completionPerM BigInt   @default(0)
+  cacheReadPerM  BigInt   @default(0)
+  cacheWritePerM BigInt   @default(0)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@id([provider, modelId, version])
+  @@index([modelId, effectiveFrom])
+}
+
+// RequestClaim 是网关的请求幂等声明：同一虚拟 Key + X-Request-Id 只允许一次上游执行。
+// 网关读写；控制面只读（管理查询）。不保存任何请求/响应正文。
+model LicenseState {
+  id                String    @id
+  licenseId         String?
+  customer          String?
+  machineCode       String?
+  payload           String?
+  sig               String?
+  kid               String?
+  expiresAt         DateTime? @db.Timestamptz(6)
+  features          Json?
+  status            String    @default("missing")
+  importedAt        DateTime? @db.Timestamptz(6)
+  firstSeenAt       DateTime  @default(now()) @db.Timestamptz(6)
+  lastSeenAt        DateTime  @default(now()) @db.Timestamptz(6)
+  revocation        Json?
+  revocationVersion Int       @default(0)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(6)
+}
+
+model RequestClaim {
+  id          String   @id @default(uuid()) @db.Uuid
+  keyId       String   @db.Uuid
+  empId       String   @db.Uuid
+  requestId   String   @db.VarChar(128)
+  payloadHash String   @db.VarChar(64)
+  path        String
+  model       String   @default("")
+  stream      Boolean  @default(false)
+  status      String   @db.VarChar(16)
+  statusCode  Int?
+  errorCode   String   @default("")
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+  expiresAt   DateTime @db.Timestamptz(6)
+
+  @@unique([keyId, requestId])
+  @@index([expiresAt])
+  @@index([empId, createdAt])
+  @@index([status, updatedAt])
+}
+
+// RateWindow 是网关联网限流的 60 秒滑动窗口计数（跨实例共享，仅网关读写）。
+model RateWindow {
+  keyId  String @db.Uuid
+  second BigInt
+  dim    String @db.VarChar(8)
+  amount BigInt @default(0)
+
+  @@id([keyId, second, dim])
+  @@index([second])
+}
+
+// ---- 维护平面 P0（FR-60/61/62/64/65/66/67）----
+//
+// 全部三张表只在「维护通道」开启后才有业务写入；表本身随迁移创建不构成维护入口
+// （RM-A01 判定的是可达的监听端点与反向连接，不是空表）。维护会话完全在控制面
+// 进程内——网关侧不新增任何监听，关闭维护（环境变量缺省）时这些表零参与。
+
+// MaintenanceTicket：客户批准的一次维护工单。维护会话必须绑定有效工单；
+// 无工单 / 过期工单 / 他人工单三种连接都在 ticket 校验处拒绝并各写一条审计（RM-A02）。
+model MaintenanceTicket {
+  id          String    @id @default(uuid()) @db.Uuid
+  // 厂商侧运维人员标识（展示用，非控制面账号；独立账号属 M2/P1）。
+  vendorName  String
+  reason      String    @default("")
+  // 工单窗口：approvedAt 之后 expiresAt 前才有效。
+  approvedAt  DateTime  @db.Timestamptz(6)
+  expiresAt   DateTime  @db.Timestamptz(6)
+  // 客户一键撤销（FR-65）：撤销后其下所有会话与凭据 ≤1s 失效。
+  revokedAt   DateTime? @db.Timestamptz(6)
+  createdById String    @db.Uuid
+  createdBy   User      @relation("MaintenanceTicketCreatedBy", fields: [createdById], references: [id])
+  sessions    MaintenanceSession[]
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([revokedAt])
+  @@index([expiresAt])
+}
+
+// MaintenanceSession：一次已批准的维护连接。凭据明文（mk_…）只在签发响应里出现一次，
+// 库里只存 SHA-256（与虚拟 Key 同口径）；scope 限定主机/账号/命令范围（RM-A03）。
+model MaintenanceSession {
+  id          String             @id @default(uuid()) @db.Uuid
+  ticketId    String             @db.Uuid
+  ticket      MaintenanceTicket  @relation(fields: [ticketId], references: [id])
+  // 撤销判定字段都在本行上：任何一步校验失败即整会话拒绝。
+  credHash    Bytes              @unique
+  credFp6     String             @db.VarChar(6)
+  // 授权范围：限定主机（IP/主机名）、账号、命令白名单键集合。
+  host        String
+  account     String
+  commandScope String[]          @default([])
+  expiresAt   DateTime           @db.Timestamptz(6)
+  revokedAt   DateTime?          @db.Timestamptz(6)
+  endedAt     DateTime?          @db.Timestamptz(6)
+  endReason   String             @default("")
+  approvals   MaintenanceApproval[]
+  createdAt   DateTime           @default(now()) @db.Timestamptz(6)
+
+  @@index([ticketId])
+  @@index([revokedAt])
+  @@index([expiresAt])
+}
+
+// MaintenanceApproval：写命令审批队列（RM-A05）。只读白名单命令直接执行；
+// 写命令进 PENDING，客户批准 / 拒绝前不执行；白名单外命令直接拒绝不进队列。
+model MaintenanceApproval {
+  id          String             @id @default(uuid()) @db.Uuid
+  sessionId   String             @db.Uuid
+  session     MaintenanceSession @relation(fields: [sessionId], references: [id])
+  command     String
+  kind        String             @db.VarChar(16) // readonly | write
+  state       String             @db.VarChar(16) // pending | approved | rejected | executed | denied_by_policy
+  commandKey  String             @default("")
+  result      String             @default("")
+  exitCode    Int?
+  requestedAt DateTime           @default(now()) @db.Timestamptz(6)
+  decidedAt   DateTime?          @db.Timestamptz(6)
+  decidedById String?            @db.Uuid
+  decidedBy   User?              @relation("MaintenanceApprovalDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([sessionId, state])
+  @@index([state, requestedAt])
+}

@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "迁移不可变性的显式例外清单。",
+    "",
+    "规则：已应用的迁移文件不许改，checksum 是 Prisma 生态判断两侧 schema 是否同一套的唯一依据。",
+    "例外只允许一种形态：旧内容会让**首装必然失败**，且修复发生在本产品尚未正式发布（0.1.0-test.x）",
+    "期间。这种例外必须在这里逐条登记历史 checksum，否则 migrate-desktop 会按违规拦下。",
+    "",
+    "每条例外的字段：",
+    "  migration  —— 迁移目录名",
+    "  retiredChecksums —— 曾经被已发布构建写进 _prisma_migrations 的 checksum 列表",
+    "  reason / decidedAt —— 为什么允许、什么时候决定的"
+  ],
+  "exceptions": [
+    {
+      "migration": "20261107000000_audit_chain",
+      "retiredChecksums": [
+        "20e9e547b4bbc70c6705914d5795cf5a13bd0a4ca1bdbef1f64af51b3502561c"
+      ],
+      "reason": "原文件对空表 setval(..., 0, true) 越界，首装必炸（0.1.0-test.4/5/6 的库都写入了这个 checksum），必须改文件才能让新装成功。已应用旧 checksum 的库在下次启动时由 migrate-desktop 就地刷新 checksum，数据与 schema 不变。正式发布后不得再新增例外。",
+      "decidedAt": "2026-11-08"
+    },
+    {
+      "migration": "20261030030000_rate_window",
+      "retiredChecksums": [
+        "d58eade2035ca7530ee331042bd3ed3d49447873568e56ae8eeb1a504dfbd259"
+      ],
+      "reason": "test.6 及更早的安装包在 Windows 上以 CRLF 检出入包，test.8 起仓库统一 LF（.gitattributes 归一化）。迁移 SQL 正文逐字节相同，仅行尾不同，因此 checksum 变化而 schema 不变。这些文件本身自创建以来从未被修改（git log 各只有一次提交）。",
+      "decidedAt": "2026-11-09"
+    },
+    {
+      "migration": "20261030040000_price_versions",
+      "retiredChecksums": [
+        "62472e0cad4251a64ff9cc9057f47c1ed4957e25265e82a116f94eb980aa7233"
+      ],
+      "reason": "同上：CRLF→LF 行尾归一化导致的 checksum 漂移，SQL 正文逐字节相同，schema 未变。",
+      "decidedAt": "2026-11-09"
+    },
+    {
+      "migration": "20261030050000_request_claim",
+      "retiredChecksums": [
+        "e8ca35ec9e55ceb995880209e5ecd68cc68a98834ef53d54932a47b1b72bee60"
+      ],
+      "reason": "同上：CRLF→LF 行尾归一化导致的 checksum 漂移，SQL 正文逐字节相同，schema 未变。",
+      "decidedAt": "2026-11-09"
+    }
+  ]
+}

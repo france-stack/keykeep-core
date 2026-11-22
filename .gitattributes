@@ -1,0 +1,10 @@
+# 统一按 LF 入库：Windows 上 checkout 时也不转换，
+# 否则 .sh / Dockerfile 进容器会带 CRLF 而启动失败。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.syso binary
+*.woff binary
+*.woff2 binary

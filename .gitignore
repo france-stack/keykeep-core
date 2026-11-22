@@ -1,0 +1,104 @@
+# ---- 凭据与本地配置（最先排除，避免任何误提交） ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+id_rsa
+id_ed25519
+id_ecdsa
+secrets/
+credentials/
+*.secret
+*.secrets
+
+# ---- 机器相关产物（不入库，见 docs/_generated/README.md） ----
+docs/_generated/env-snapshot.json
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.egg-info/
+# 锚定仓库根：未锚定的 build/ 会把 scripts/build/ 里的发版脚本一起排除。
+/build/
+# dist/ 是构建暂存区，二进制一律不入库（分发走 scripts/ops/build_connectors.sh
+# → src/control/public/downloads/，发布时随安装包带走）。
+/dist/
+
+# ---- Node / 前端 ----
+node_modules/
+.next/
+.next-maint/
+out/
+.turbo/
+*.tsbuildinfo
+pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+
+# ---- Go ----
+/bin/
+*.exe
+*.test
+*.out
+
+# ---- 容器与本地数据 ----
+data/
+volumes/
+*.sqlite
+*.sqlite3
+*.db
+
+# ---- 原型原始证据（大文件与原始输出单独归档，见 docs/prototypes/README.md） ----
+prototypes/**/evidence/raw/
+prototypes/**/evidence/*.log
+prototypes/**/evidence/*.jsonl
+
+# ---- 编辑器与系统 ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- 文档构建中间产物 ----
+~$*.docx
+~$*.xlsx
+~$*.pptx
+*.tmp
+
+# ---- 员工端连接器发布产物（二进制不入库，见 scripts/ops/build_connectors.sh） ----
+src/control/public/downloads/
+
+# ---- 上游参考源码归档（第三方快照，只按路径 + SHA-256 索引，见 docs/reports/） ----
+app/*.zip
+
+# ---- 网关本地 auth 目录（联调产物） ----
+src/gateway/auths/
+
+# ---- 本地工具状态（agent 运行时目录，与本项目代码无关） ----
+.zcode/
+.mimosa/
+**/.mimosa/
+
+# ---- 打包产物（构建脚本输出，含数百 MB 二进制与签名私钥引用） ----
+# 必须锚定仓库根：写成 build/ 会连 scripts/build/ 下的发版脚本一起排除，
+# 而 win-release.ps1 与 fetch-runtime.ps1 是要入库的（运维手册与 CHANGELOG 都引用它们）。
+/build/
+
+# ---- 本地 Agent 运行目录（worktree、诊断日志、临时探针，不入库） ----
+/.agents/

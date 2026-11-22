@@ -1,0 +1,18 @@
+# E2E-only build: same binary, alpine runtime and a reachable Go proxy.
+# The product image stays distroless (Dockerfile).
+FROM golang:1.26.10 AS build
+WORKDIR /src
+ENV CGO_ENABLED=0 GOTOOLCHAIN=auto GOPROXY=https://goproxy.cn,direct
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN go build -trimpath -ldflags="-s -w" -o /out/gateway ./cmd/gateway
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates && adduser -D -u 65532 app
+WORKDIR /app
+COPY --from=build /out/gateway /app/gateway
+COPY config.example.yaml /app/config.example.yaml
+EXPOSE 8080
+USER app
+ENTRYPOINT ["/app/gateway"]

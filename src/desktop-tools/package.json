@@ -1,0 +1,10 @@
+{
+  "name": "keykeep-desktop-tools",
+  "private": true,
+  "description": "桌面版首装脚本（迁移、种子）的运行时依赖。用 npm 而非 pnpm 安装：pnpm 的符号链接布局在 Windows 上被复制后会断链，这些脚本要随安装包分发到用户机器。",
+  "type": "module",
+  "dependencies": {
+    "@node-rs/argon2": "2.2.2",
+    "pg": "8.23.1"
+  }
+}

@@ -1,0 +1,30 @@
+# KeyKeep 数据面网关示例配置（CLIProxyAPI v8 形状）。
+# 复制为 config.yaml 后替换占位值；真实上游凭据必须由管理面加密写入，
+# 本文件只用于本地联调，不得提交真实 Key。
+
+config-version: 8
+
+# SDK 的 auth 目录：OAuth/文件凭据落在这里；容器内挂载到 /data/auths。
+auth-dir: "./auths"
+
+# 内嵌 SDK 的实际监听地址；外层网关会覆盖为 127.0.0.1:18080。
+server:
+  host: "127.0.0.1"
+  port: 18080
+
+# SDK 只看到网关注入的内部 Key；员工的虚拟 Key 由网关查库校验后替换。
+access:
+  api-keys:
+    - "keykeep-internal"
+
+# 上游示例：本地 mock（P-01—P-05 的 harness 使用同一形状）。
+api-keys:
+  claude:
+    - name: mock-claude
+      base-url: "http://127.0.0.1:19000"
+      models:
+        - name: "claude-3-5-sonnet-20241022"
+          alias: "mock-claude"
+      keys:
+        - api-key: "replace-with-upstream-key"
+          request-retry: 0

@@ -1,0 +1,169 @@
+name: keykeep
+
+# 阶段 1 脚手架：数据面 :8080，管理面 :8443（容器内 3000），PG16。
+# 真实上游凭据不在此文件；由管理面加密写入网关的 auth 目录。
+#
+# 没有 Redis：限流/预算/幂等全部走 PostgreSQL（RateWindow、advisory lock），
+# 源码里 Redis 零引用。保留一个没人连的容器只会让人误以为「有分布式能力」。
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: keykeep
+      POSTGRES_USER: keykeep
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keykeep -d keykeep"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 一次性迁移 + 首装种子。没有这一步，control 与 gateway 会对着空库启动：
+  # 控制面健康检查报 migration_pending（容器 unhealthy），网关则因为
+  # ProviderCredential 表不存在反复重启——实测就是这个现象。
+  # 跑完即退出（exit 0），控制面/网关用 condition: service_completed_successfully 等它。
+  migrate:
+    build:
+      context: ./src/control
+      target: migrate
+      args:
+        COREPACK_NPM_REGISTRY: "${COREPACK_NPM_REGISTRY:-https://registry.npmjs.org}"
+    environment:
+      DATABASE_URL: "postgresql://keykeep:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/keykeep?schema=public"
+      # 首装账号口令：不填则每次起栈生成随机口令（并且因为只写一次，第二次起栈就再也对不上）。
+      # 填进 .env 才是可重复部署的正确姿势。
+      KEYKEEP_SEED_ADMIN_PASSWORD: "${KEYKEEP_SEED_ADMIN_PASSWORD:-}"
+      KEYKEEP_SEED_USER_PASSWORD: "${KEYKEEP_SEED_USER_PASSWORD:-}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  gateway:
+    build:
+      context: ./src/gateway
+      args:
+        # 基础镜像与 Go 模块代理：国内网络直连 gcr.io / proxy.golang.org 会 TLS 超时，
+        # 而这是 `docker compose up` 的第一道坑。默认仍是官方源。
+        GATEWAY_BASE_IMAGE: "${GATEWAY_BASE_IMAGE:-gcr.io/distroless/static-debian12:nonroot}"
+        GOPROXY: "${GOPROXY:-https://proxy.golang.org,direct}"
+    ports:
+      - "8080:8080"
+    environment:
+      KEYKEEP_GATEWAY_LISTEN: ":8080"
+      KEYKEEP_SDK_CONFIG: "/config/config.yaml"
+      KEYKEEP_SDK_ADDR: "127.0.0.1:18080"
+      KEYKEEP_DATABASE_URL: "postgresql://keykeep:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/keykeep?sslmode=disable"
+      KEYKEEP_INTERNAL_KEY_PREFIX: "ik_"
+      KEYKEEP_KEK: "${KEYKEEP_KEK:?set KEYKEEP_KEK to base64(32 bytes)}"
+      # 审计链密钥：配了就按 HMAC 入链（持库写权限者也续不出尾巴）。
+      # 必须与控制面同一个值，否则两边算出的摘要互相判 hash_mismatch。
+      KEYKEEP_AUDIT_CHAIN_KEY: "${KEYKEEP_AUDIT_CHAIN_KEY:-}"
+      KEYKEEP_MASK_MODE: "${KEYKEEP_MASK_MODE:-rules-only}"
+      KEYKEEP_MASK_MODEL_URL: "${KEYKEEP_MASK_MODEL_URL:-}"
+      KEYKEEP_MASK_WATCH_INTERVAL: "${KEYKEEP_MASK_WATCH_INTERVAL:-2s}"
+    volumes:
+      - ./src/gateway/config.example.yaml:/config/config.yaml:ro
+      - gateway-auths:/app/auths
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    # 镜像基于 distroless（没有 wget/curl），所以网关自带一个 --healthcheck
+    # 子命令：进程内探一次 /healthz，退出码即结果。往非 distroless 底座里
+    # 加一个 shell 只为跑健康检查，会把整个攻击面换回来。
+    healthcheck:
+      test: ["CMD", "/app/gateway", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  control:
+    build:
+      context: ./src/control
+      args:
+        COREPACK_NPM_REGISTRY: "${COREPACK_NPM_REGISTRY:-https://registry.npmjs.org}"
+    ports:
+      - "8443:3000"
+    environment:
+      DATABASE_URL: "postgresql://keykeep:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/keykeep?schema=public"
+      KEYKEEP_KEK: "${KEYKEEP_KEK:?set KEYKEEP_KEK to base64(32 bytes)}"
+      KEYKEEP_AUDIT_CHAIN_KEY: "${KEYKEEP_AUDIT_CHAIN_KEY:-}"
+      SESSION_SECRET: "${SESSION_SECRET:?set SESSION_SECRET to >=32 random chars in .env}"
+      # 会话 cookie 的 Secure 标志。镜像是 NODE_ENV=production，而 cookieSecure()
+      # 在 production 下默认 true——于是浏览器拿到 `Secure` 的 kk_session，在
+      # `http://<内网 IP>:8443` 这类明文入口上根本不会回传，表现为「登录成功、
+      # 一刷新就退出」（2026-11-22 实测）。内网 HTTP 是这套交付的主场景，
+      # 所以默认 false；前面挂了 TLS（反代 / 自签证书）时必须在 .env 里改成 true。
+      KEYKEEP_COOKIE_SECURE: "${KEYKEEP_COOKIE_SECURE:-false}"
+      # SSRF 防护：默认拒绝私网上游（防被劫持的管理员会话探测内网 / 云元数据）。
+      # 上游是「内网中转 / 同栈 mock」时必须显式设 true——这也是本地试跑
+      # 最容易卡住的一步：供应商保存成功但连通性测试与转发都报 blocked_private。
+      KEYKEEP_ALLOW_PRIVATE_UPSTREAMS: "${KEYKEEP_ALLOW_PRIVATE_UPSTREAMS:-false}"
+      KEYKEEP_GATEWAY_URL: "http://gateway:8080"
+      # 员工页展示的对外地址。留空时按浏览器访问控制台的主机推断，
+      # 反向代理/非默认端口场景下必须显式设置，否则员工会拿到连不上的地址。
+      KEYKEEP_PUBLIC_GATEWAY_URL: "${KEYKEEP_PUBLIC_GATEWAY_URL:-}"
+      KEYKEEP_PUBLIC_CONSOLE_URL: "${KEYKEEP_PUBLIC_CONSOLE_URL:-}"
+      GATEWAY_PORT: "${GATEWAY_PORT:-8080}"
+      KEYKEEP_MASK_MODE: "${KEYKEEP_MASK_MODE:-rules-only}"
+      KEYKEEP_LICENSE_PUBLIC_KEY: "${KEYKEEP_LICENSE_PUBLIC_KEY:-}"
+      KEYKEEP_MACHINE_CODE: "${KEYKEEP_MACHINE_CODE:-}"
+      KEYKEEP_LICENSE_FILE: "${KEYKEEP_LICENSE_FILE:-}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    # 控制面健康检查：/api/healthz 会一并核对数据库可达与迁移是否跑完。
+    # 升级事故里"进程活着但迁移没跟上"是最常见的一种，这个探针专门盯它。
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 内置演示上游（可选 profile，不参与默认起栈）。
+  # `docker compose --profile demo up -d mock` 才起；用来跑 scripts/demo/quickstart.py，
+  # 不需要任何真实上游凭据。生产部署不要启用。
+  mock:
+    profiles: ["demo"]
+    image: python:3.12-alpine
+    command: ["python3", "/mock/mock_upstream.py", "--host", "0.0.0.0", "--port", "19011"]
+    volumes:
+      - ./scripts/demo/mock_upstream.py:/mock/mock_upstream.py:ro
+    expose:
+      - "19011"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  gateway-auths:
