@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  gateway:
+    name: 数据面（Go）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/gateway/go.mod
+          cache-dependency-path: src/gateway/go.sum
+      - run: go vet ./...
+      - run: go build ./...
+      - name: go test（需要 PG 的用例自动跳过）
+        run: go test -count=1 ./...
+
+  control:
+    name: 管理面（Next.js）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/control
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: src/control/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma validate
+      - run: pnpm prisma generate
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+
+  compose:
+    name: compose 配置与演示脚本语法
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config
+        run: |
+          POSTGRES_PASSWORD=x KEYKEEP_KEK=y SESSION_SECRET=z \
+            docker compose config --quiet
+      - name: docker compose config（含 demo profile）
+        run: |
+          POSTGRES_PASSWORD=x KEYKEEP_KEK=y SESSION_SECRET=z \
+            docker compose --profile demo config --quiet
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 演示脚本可编译且能打印用法
+        run: |
+          python -m py_compile scripts/demo/quickstart.py scripts/demo/mock_upstream.py
+          python scripts/demo/quickstart.py --help > /dev/null
+
+  smoke:
+    name: 端到端冒烟（起栈 → 演示链路）
+    runs-on: ubuntu-latest
+    needs: [compose]
+    steps:
+      - uses: actions/checkout@v4
+      - name: 准备 .env
+        run: |
+          cat > .env <<EOF
+          POSTGRES_PASSWORD=ci-postgres-password
+          KEYKEEP_KEK=$(openssl rand -base64 32)
+          SESSION_SECRET=$(openssl rand -hex 32)
+          KEYKEEP_SEED_ADMIN_PASSWORD=ci-admin-password-123
+          KEYKEEP_SEED_USER_PASSWORD=ci-employee-password-123
+          KEYKEEP_COOKIE_SECURE=false
+          KEYKEEP_ALLOW_PRIVATE_UPSTREAMS=true
+          GOPROXY=https://proxy.golang.org,direct
+          EOF
+      - name: 起栈
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8443/api/healthz || true)
+            gw=$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://127.0.0.1:8080/healthz || true)
+            if [ "$code" = "200" ] && [ "$gw" = "200" ]; then echo "ready"; exit 0; fi
+            sleep 5
+          done
+          echo "stack did not become ready"; docker compose logs --tail 80; exit 1
+      - name: 演示链路
+        run: |
+          docker compose --profile demo up -d mock
+          sleep 5
+          python3 scripts/demo/quickstart.py \
+            --mock --base-url http://mock:19011 \
+            --provider anthropic --model claude-3-5-sonnet-20241022 \
+            --price-prompt 300 --price-completion 1500 \
+            --admin-password ci-admin-password-123
+      - name: 失败时导出日志
+        if: failure()
+        run: docker compose logs --tail 200
+      - name: 清理
+        if: always()
+        run: docker compose --profile demo down -v
