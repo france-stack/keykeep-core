@@ -7,7 +7,7 @@
 | `gateway/cmd/kkdesk/`, `kkapp/` | Windows 桌面版进程看护与托盘 | Go + WebView2 |
 | `gateway/cmd/kkmock/` | 桌面版内置演示上游 | Go |
 | `control/` | 管理面：控制台页面 + 管理 API + 数据模型 | Next.js App Router + TypeScript |
-| `control/prisma/` | 数据模型与迁移（Prisma Migrate，14 个迁移） | PostgreSQL 16 |
+| `control/prisma/` | 数据模型与迁移（Prisma Migrate，13 个迁移） | PostgreSQL 16 |
 | `desktop-tools/` | Windows 安装包的迁移 / 首装种子 / 备份恢复脚本（随包分发） | Node（无打包，直接 node 运行） |
 
 ## 硬约束
