@@ -21,6 +21,27 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm prisma generate && pnpm build
 
+# 一次性迁移 + 首装种子镜像（compose 的 migrate 服务用它）。
+#
+# 为什么单独一层而不是塞进控制面镜像：控制面是 next standalone，里面没有
+# prisma CLI（也不需要——运行时不该带迁移工具）。把 CLI 装进运行镜像等于
+# 让生产进程随时能改表结构。这里只取 deps 阶段的完整依赖树 + prisma/
+# + lib/（seed 的时区规整函数），跑完即退出。
+#
+# seed 是幂等的：同名账号已存在时只更新显示名/角色/启用位，不动口令哈希。
+# 因此「每次 up 都跑一遍」不会把运维改过的管理员口令打回初始值。
+FROM node:22-alpine AS migrate
+ARG COREPACK_NPM_REGISTRY
+ENV COREPACK_NPM_REGISTRY=${COREPACK_NPM_REGISTRY} npm_config_registry=${COREPACK_NPM_REGISTRY}
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY prisma ./prisma
+COPY lib ./lib
+RUN pnpm prisma generate
+CMD ["sh", "-c", "pnpm prisma migrate deploy && node prisma/seed.mjs"]
+
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
