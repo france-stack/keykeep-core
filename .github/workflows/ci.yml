@@ -48,11 +48,19 @@ jobs:
           cache: pnpm
           cache-dependency-path: src/control/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # prisma validate/generate 都要读 schema 里的 env("DATABASE_URL")；
+      # 这里不需要真的连库，给个占位值即可（真连库的检查在 smoke job）。
       - run: pnpm prisma validate
+        env:
+          DATABASE_URL: postgresql://keykeep:placeholder@127.0.0.1:5432/keykeep?schema=public
       - run: pnpm prisma generate
+        env:
+          DATABASE_URL: postgresql://keykeep:placeholder@127.0.0.1:5432/keykeep?schema=public
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build
+        env:
+          DATABASE_URL: postgresql://keykeep:placeholder@127.0.0.1:5432/keykeep?schema=public
 
   compose:
     name: compose 配置与演示脚本语法
